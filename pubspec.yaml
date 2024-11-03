@@ -1,0 +1,43 @@
+name: accountingapp
+description: "A new Flutter project."
+
+publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.5.3
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # The following adds the Cupertino Icons font to your application.
+  # Use with the CupertinoIcons class for iOS style icons.
+  cupertino_icons: ^1.0.8
+  provider: ^6.0.0       # 상태 관리를 위한 패키지
+  http: ^0.13.0          # HTTP 통신을 위한 패키지
+  web3dart: ^2.5.0       # 블록체인 연동을 위한 패키지 (업데이트)
+  firebase_core: ^2.0.0
+  cloud_firestore: ^4.0.0
+  fl_chart: ^0.65.0
+  font_awesome_flutter: ^10.7.0 # 최신 버전으로 업데이트
+  uuid: ^3.0.6
+  flutter_dotenv: ^5.2.1
+  intl: ^0.18.0
+  logger: ^1.1.0
+  
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - .env
+    - assets/TransactionStorageABI.json
+  

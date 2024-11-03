@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1088341553950",
+    "project_id": "accounting-app-dc9f1",
+    "storage_bucket": "accounting-app-dc9f1.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1088341553950:android:6658f3360f8545aa7b4f0f",
+        "android_client_info": {
+          "package_name": "com.example.accountingapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAlMPKBRngAcmTga_VVp8DQfXwtayChVag"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
