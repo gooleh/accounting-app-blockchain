@@ -7,7 +7,6 @@ import 'add_transaction_screen.dart';
 import 'stats_screen.dart';
 import 'settings_screen.dart';
 import '../providers/transaction_provider.dart';
-import '../providers/blockchain_transaction_provider.dart';
 import '../models/transaction.dart' as models;
 import '../colors.dart';
 import '../icons.dart'; // CategoryIcons 임포트
@@ -192,6 +191,15 @@ class HomeTabState extends State<HomeTab> with SingleTickerProviderStateMixin {
                   ElevatedButton.icon(
                     icon: const Icon(Icons.block),
                     label: const Text('블록체인 거래 보기'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.kAccentColor,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                          vertical: 12, horizontal: 24),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                    ),
                     onPressed: () {
                       Navigator.pushNamed(context, '/blockchain_transactions');
                     },
@@ -392,12 +400,8 @@ class HomeTabState extends State<HomeTab> with SingleTickerProviderStateMixin {
                 margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: ListTile(
                   leading: Icon(
-                    tx.type == 'income'
-                        ? Icons.arrow_downward
-                        : Icons.arrow_upward,
-                    color: tx.type == 'income'
-                        ? Colors.greenAccent
-                        : Colors.redAccent,
+                    iconData,
+                    color: AppColors.kAccentColor,
                   ),
                   title: Text(tx.title,
                       style: Theme.of(context).textTheme.bodyLarge),

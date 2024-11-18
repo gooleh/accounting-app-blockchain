@@ -5,7 +5,8 @@ import 'package:provider/provider.dart';
 import '../providers/transaction_provider.dart';
 import '../models/transaction.dart' as app_models; // 별칭 사용
 import 'package:uuid/uuid.dart';
-import '../services/blockchain_service.dart'; // BlockchainService 임포트
+import '../colors.dart'; // AppColors 임포트
+import '../icons.dart'; // CategoryIcons 임포트
 
 class AddTransactionScreen extends StatefulWidget {
   const AddTransactionScreen({super.key});
@@ -20,7 +21,7 @@ class AddTransactionScreenState extends State<AddTransactionScreen> {
   String _selectedType = 'expense';
   String _selectedCategory = '기타 지출'; // 기본 카테고리
   final _formKey = GlobalKey<FormState>();
-  final _uuid = Uuid();
+  final _uuid = const Uuid();
 
   final List<String> _expenseCategories = [
     '식비',
@@ -52,12 +53,14 @@ class AddTransactionScreenState extends State<AddTransactionScreen> {
     final enteredAmount = double.tryParse(_amountController.text.trim());
 
     if (enteredAmount == null || enteredAmount <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('유효한 금액을 입력해주세요.'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('유효한 금액을 입력해주세요.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
       return;
     }
 
@@ -77,28 +80,29 @@ class AddTransactionScreenState extends State<AddTransactionScreen> {
     );
 
     try {
-      // BlockchainService 인스턴스 가져오기
-      final blockchainService =
-          Provider.of<BlockchainService>(context, listen: false);
-
+      // 거래 추가
       await Provider.of<TransactionProvider>(context, listen: false)
-          .addTransaction(newTransaction, blockchainService); // 두 번째 인자 추가
+          .addTransaction(newTransaction);
 
-      Navigator.of(context).pop();
+      if (mounted) {
+        Navigator.of(context).pop();
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('거래가 성공적으로 추가되었습니다.'),
-          backgroundColor: Colors.green,
-        ),
-      );
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('거래가 성공적으로 추가되었습니다.'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
     } catch (error) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('거래 추가 중 오류가 발생했습니다: $error'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('거래 추가 중 오류가 발생했습니다: $error'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -120,7 +124,13 @@ class AddTransactionScreenState extends State<AddTransactionScreen> {
             crossAxisAlignment: CrossAxisAlignment.stretch, // 위젯 너비 조정
             children: [
               TextFormField(
-                decoration: const InputDecoration(labelText: '제목'),
+                decoration: InputDecoration(
+                  labelText: '제목',
+                  prefixIcon: const Icon(Icons.title),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
                 controller: _titleController,
                 validator: (value) {
                   if (value == null || value.trim().isEmpty) {
@@ -131,7 +141,13 @@ class AddTransactionScreenState extends State<AddTransactionScreen> {
               ),
               const SizedBox(height: 16), // 간격 추가
               TextFormField(
-                decoration: const InputDecoration(labelText: '금액'),
+                decoration: InputDecoration(
+                  labelText: '금액',
+                  prefixIcon: const Icon(Icons.attach_money),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
                 controller: _amountController,
                 keyboardType:
                     const TextInputType.numberWithOptions(decimal: true),
@@ -166,7 +182,13 @@ class AddTransactionScreenState extends State<AddTransactionScreen> {
                         _selectedType == 'income' ? '기타 수입' : '기타 지출';
                   });
                 },
-                decoration: const InputDecoration(labelText: '타입'),
+                decoration: InputDecoration(
+                  labelText: '타입',
+                  prefixIcon: const Icon(Icons.swap_horiz),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
               ),
               const SizedBox(height: 16),
               DropdownButtonFormField<String>(
@@ -184,12 +206,31 @@ class AddTransactionScreenState extends State<AddTransactionScreen> {
                     _selectedCategory = value!;
                   });
                 },
-                decoration: const InputDecoration(labelText: '카테고리'),
+                decoration: InputDecoration(
+                  labelText: '카테고리',
+                  prefixIcon: const Icon(Icons.category),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
               ),
               const SizedBox(height: 32), // 간격 조정
-              ElevatedButton(
-                onPressed: _submitData,
-                child: const Text('추가'),
+              SizedBox(
+                height: 50,
+                child: ElevatedButton(
+                  onPressed: _submitData,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.kAccentColor,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  child: const Text(
+                    '추가',
+                    style: TextStyle(fontSize: 18),
+                  ),
+                ),
               ),
             ],
           ),

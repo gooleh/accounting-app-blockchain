@@ -15,12 +15,12 @@ import 'package:logger/logger.dart'; // Logger 임포트
 
 final Logger _logger = Logger(
   printer: PrettyPrinter(
-    methodCount: 0, // 메서드 호출 수
-    errorMethodCount: 5, // 에러 시 메서드 호출 수
-    lineLength: 50, // 한 줄의 길이
-    colors: true, // 색상 사용
-    printEmojis: true, // 이모지 사용
-    printTime: false, // 시간 출력 여부
+    methodCount: 0,
+    errorMethodCount: 5,
+    lineLength: 50,
+    colors: true,
+    printEmojis: true,
+    printTime: false,
   ),
 );
 
@@ -28,17 +28,16 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   try {
-    // dotenv 초기화 (모바일 용: fileName 생략, .env는 프로젝트 루트에 위치)
     await dotenv.load();
 
-    // 환경 변수 로드 확인 (디버깅용)
     _logger.d('dotenv 파일이 성공적으로 로드되었습니다.');
     _logger.d('RPC_URL: ${dotenv.env['RPC_URL']}');
     _logger.d('PRIVATE_KEY: ${dotenv.env['PRIVATE_KEY']}');
     _logger.d('CONTRACT_ADDRESS: ${dotenv.env['CONTRACT_ADDRESS']}');
+    _logger.d('PINATA_API_KEY: ${dotenv.env['PINATA_API_KEY']}');
+    _logger.d('PINATA_SECRET_API_KEY: ${dotenv.env['PINATA_SECRET_API_KEY']}');
   } catch (e) {
     _logger.e('dotenv 파일을 로드하지 못했습니다. 오류: $e');
-    // dotenv 로드 실패 시 로깅만 하고 앱을 계속 실행하도록 함
   }
 
   try {
@@ -48,7 +47,6 @@ Future<void> main() async {
     _logger.d('Firebase 초기화 완료');
   } catch (e) {
     _logger.e('Firebase 초기화 오류: $e');
-    // Firebase 초기화 실패 시 로깅만 하고 앱을 계속 실행하도록 함
   }
 
   // Initialize BlockchainService before providing
@@ -57,19 +55,17 @@ Future<void> main() async {
     blockchainService = BlockchainService();
     await blockchainService.init();
     _logger.d('BlockchainService 초기화 완료');
-
-    // RPC 연결 테스트 (선택 사항)
-    // await blockchainService.testRpcConnection();
   } catch (e) {
     _logger.e('BlockchainService 초기화 오류: $e');
-    // BlockchainService 초기화 실패 시 앱 실행을 중단합니다.
-    return; // Exit if blockchainService cannot be initialized
+    return;
   }
 
   runApp(
     MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (_) => TransactionProvider()),
+        ChangeNotifierProvider(
+          create: (_) => TransactionProvider(blockchainService),
+        ),
         ChangeNotifierProvider<BlockchainService>.value(
           value: blockchainService,
         ),
@@ -98,7 +94,6 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Remove FutureBuilder as blockchainService is already initialized
     return MaterialApp(
       title: '가계부 앱',
       theme: ThemeData(
@@ -138,13 +133,14 @@ class MyApp extends StatelessWidget {
           ),
         ),
         inputDecorationTheme: InputDecorationTheme(
-          labelStyle: TextStyle(color: AppColors.kTextColor),
+          labelStyle: const TextStyle(color: AppColors.kTextColor),
+          prefixIconColor: AppColors.kAccentColor,
           enabledBorder: OutlineInputBorder(
-            borderSide: BorderSide(color: AppColors.kAccentColor),
+            borderSide: const BorderSide(color: AppColors.kAccentColor),
             borderRadius: BorderRadius.circular(8),
           ),
           focusedBorder: OutlineInputBorder(
-            borderSide: BorderSide(color: AppColors.kAccentColor),
+            borderSide: const BorderSide(color: AppColors.kAccentColor),
             borderRadius: BorderRadius.circular(8),
           ),
         ),

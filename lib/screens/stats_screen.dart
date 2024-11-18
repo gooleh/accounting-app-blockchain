@@ -6,15 +6,16 @@ import 'package:fl_chart/fl_chart.dart';
 import '../models/monthly_summary.dart';
 import '../models/transaction.dart' as models;
 import '../widgets/chart_legend.dart';
+import '../colors.dart'; // AppColors 임포트
 
 class StatsScreen extends StatefulWidget {
   const StatsScreen({super.key});
 
   @override
-  _StatsScreenState createState() => _StatsScreenState();
+  StatsScreenState createState() => StatsScreenState();
 }
 
-class _StatsScreenState extends State<StatsScreen>
+class StatsScreenState extends State<StatsScreen>
     with SingleTickerProviderStateMixin {
   List<MonthlySummary> _monthlySummaries = [];
   Map<String, List<models.Transaction>> _monthlyTransactions = {};
@@ -210,8 +211,8 @@ class _StatsScreenState extends State<StatsScreen>
                     // 월별 수입/지출 라인차트
                     const SizedBox(height: 16),
                     ChartLegend(
-                      incomeColor: Colors.green,
-                      expenseColor: Colors.red,
+                      incomeColor: Colors.greenAccent,
+                      expenseColor: Colors.redAccent,
                     ),
                     const SizedBox(height: 16),
                     SizedBox(
@@ -229,12 +230,12 @@ class _StatsScreenState extends State<StatsScreen>
                                 );
                               }).toList(),
                               isCurved: true,
-                              color: Colors.green,
+                              color: Colors.greenAccent,
                               barWidth: 2,
                               dotData: FlDotData(show: false),
                               belowBarData: BarAreaData(
                                 show: true,
-                                color: Colors.green.withOpacity(0.2),
+                                color: Colors.greenAccent.withOpacity(0.2),
                               ),
                             ),
                             LineChartBarData(
@@ -247,12 +248,12 @@ class _StatsScreenState extends State<StatsScreen>
                                 );
                               }).toList(),
                               isCurved: true,
-                              color: Colors.red,
+                              color: Colors.redAccent,
                               barWidth: 2,
                               dotData: FlDotData(show: false),
                               belowBarData: BarAreaData(
                                 show: true,
-                                color: Colors.red.withOpacity(0.2),
+                                color: Colors.redAccent.withOpacity(0.2),
                               ),
                             ),
                           ],
@@ -296,9 +297,10 @@ class _StatsScreenState extends State<StatsScreen>
                               tooltipBgColor: Colors.blueAccent,
                               getTooltipItems: (touchedSpots) {
                                 return touchedSpots.map((spot) {
-                                  String label = spot.bar.color == Colors.green
-                                      ? '수입'
-                                      : '지출';
+                                  String label =
+                                      spot.bar.color == Colors.greenAccent
+                                          ? '수입'
+                                          : '지출';
                                   return LineTooltipItem(
                                     '$label: ${spot.y.toStringAsFixed(0)}원',
                                     const TextStyle(color: Colors.white),
@@ -382,8 +384,8 @@ class _StatsScreenState extends State<StatsScreen>
                                     ? Icons.arrow_upward
                                     : Icons.arrow_downward,
                                 color: tx.type == 'income'
-                                    ? Colors.green
-                                    : Colors.red,
+                                    ? Colors.greenAccent
+                                    : Colors.redAccent,
                               ),
                               title: Text(tx.title),
                               subtitle: Text(

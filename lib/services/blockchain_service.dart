@@ -5,18 +5,19 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:web3dart/web3dart.dart';
-import 'package:http/io_client.dart'; // Client 대신 IOClient 임포트
+import 'package:http/io_client.dart';
 import 'package:flutter/foundation.dart';
-import 'package:cloud_firestore/cloud_firestore.dart' as firestore; // 접두사 추가
-import 'package:logger/logger.dart'; // Logger 패키지 임포트
-import '../models/transaction.dart' as app_models; // 사용자 정의 Transaction 모델 임포트
+import 'package:logger/logger.dart';
+import '../models/transaction.dart' as app_models;
+import 'ipfs_service.dart'; // IPFSService 임포트
 
 class BlockchainService extends ChangeNotifier {
   late Web3Client _client;
   late DeployedContract _contract;
   late ContractFunction _storeTransaction;
+  late ContractFunction _storeTransactions;
   late ContractFunction _getTransaction;
-  late ContractFunction _getTransactionCount; // 추가: getTransactionCount 함수
+  late ContractFunction _getTransactionCount;
   late ContractEvent _transactionStoredEvent;
 
   // 환경 변수에서 값 가져오기
@@ -33,6 +34,7 @@ class BlockchainService extends ChangeNotifier {
 
   // Logger 인스턴스 생성
   final Logger _logger = Logger();
+  final IPFSService _ipfsService = IPFSService(); // IPFSService 인스턴스 생성
 
   // 외부에서 스트림을 구독할 수 있도록 제공
   Stream<app_models.Transaction> get transactionStream =>
@@ -55,18 +57,17 @@ class BlockchainService extends ChangeNotifier {
   /// 초기화 함수
   Future<void> init() async {
     try {
-      // ABI 로드 (ABI-only 파일을 사용)
+      // ABI 로드
       String abiString =
           await rootBundle.loadString('assets/TransactionStorageABI.json');
       _logger.d('Loaded ABI string: $abiString');
-      final abiJson = jsonDecode(abiString);
 
       // 스마트 계약 주소
       final contractAddr = EthereumAddress.fromHex(_contractAddress);
 
       // 계약 ABI 및 인스턴스 생성
-      final contractAbi = ContractAbi.fromJson(
-          abiString, 'TransactionStorage'); // 수정: abiString 사용
+      final contractAbi =
+          ContractAbi.fromJson(abiString, 'HighValueDataStorage');
       _contract = DeployedContract(
         contractAbi,
         contractAddr,
@@ -74,9 +75,9 @@ class BlockchainService extends ChangeNotifier {
 
       // 함수 가져오기
       _storeTransaction = _contract.function('storeTransaction');
+      _storeTransactions = _contract.function('storeTransactions');
       _getTransaction = _contract.function('getTransaction');
-      _getTransactionCount = _contract
-          .function('getTransactionCount'); // 추가: getTransactionCount 함수 초기화
+      _getTransactionCount = _contract.function('getTransactionCount');
 
       // 이벤트 가져오기
       _transactionStoredEvent = _contract.event('TransactionStored');
@@ -88,57 +89,20 @@ class BlockchainService extends ChangeNotifier {
       _listenToTransactionEvents();
     } catch (e, stackTrace) {
       _logger.e('스마트 계약 초기화 오류: $e', e, stackTrace);
-      rethrow; // 스택 트레이스를 유지하면서 예외를 다시 던짐
+      rethrow;
     }
   }
 
-  /// 트랜잭션을 보내는 함수
-  Future<String> sendTransaction(
-    String id,
-    String title, // title 추가
-    double amount,
-    DateTime date,
-    String transactionType,
-    String category,
-  ) async {
+  /// 단일 트랜잭션을 보내는 함수
+  Future<String> sendTransaction(app_models.Transaction tx) async {
     try {
-      // 디버깅 로그 추가
-      _logger.d('sendTransaction called with:');
-      _logger.d('id: $id (type: ${id.runtimeType})');
-      _logger.d('title: $title (type: ${title.runtimeType})');
-      _logger.d('amount: $amount (type: ${amount.runtimeType})');
-      _logger.d('date: $date (type: ${date.runtimeType})');
-      _logger.d(
-          'transactionType: $transactionType (type: ${transactionType.runtimeType})');
-      _logger.d('category: $category (type: ${category.runtimeType})');
-
-      // 보내는 계정의 잔액 확인
-      EtherAmount balance = await getBalance();
-      EtherAmount gasPrice = await _client.getGasPrice();
-      BigInt txCost = BigInt.from(600000) * gasPrice.getInWei;
-
-      if (balance.getInWei < txCost) {
-        _logger.e('보내는 계정의 잔액이 부족합니다. 로컬 Ganache 네트워크에서 테스트 ETH를 충전하세요.');
-        return 'Insufficient balance';
+      // CID가 있는지 확인
+      if (tx.cid.isEmpty) {
+        throw Exception('CID가 없습니다. IPFS 업로드 후 CID를 받아야 합니다.');
       }
 
-      // amount를 원 단위로 저장 (BigInt로 변환)
-      BigInt amountInWon;
-      try {
-        amountInWon = BigInt.from(amount.toInt()); // 소수점 제거
-      } catch (e, stackTrace) {
-        _logger.e('amountInWon 변환 오류: $e', e, stackTrace);
-        rethrow;
-      }
-
-      // date를 Unix timestamp (초 단위)로 변환
-      BigInt dateUnix = BigInt.from(date.millisecondsSinceEpoch ~/ 1000);
-
-      // 디버깅 로그 추가
-      _logger.d(
-          'Converted amountInWon: $amountInWon (type: ${amountInWon.runtimeType})');
-      _logger
-          .d('Converted dateUnix: $dateUnix (type: ${dateUnix.runtimeType})');
+      // 블록체인 전송할 데이터 로깅
+      _logger.d('블록체인 전송할 데이터: ${jsonEncode({'id': tx.id, 'cid': tx.cid})}');
 
       // 트랜잭션 전송
       final result = await _client.sendTransaction(
@@ -146,29 +110,55 @@ class BlockchainService extends ChangeNotifier {
         Transaction.callContract(
           contract: _contract,
           function: _storeTransaction,
-          parameters: [id, amountInWon, dateUnix, transactionType, category],
-          maxGas: 600000,
-          gasPrice: gasPrice,
+          parameters: [tx.id, tx.cid],
+          maxGas: 200000,
+          gasPrice: EtherAmount.inWei(BigInt.from(1000000000)), // 1 Gwei
         ),
-        chainId: 1337, // Ganache의 실제 네트워크 ID로 수정 (5777 -> 1337)
+        chainId: 11155111, // 네트워크에 따라 변경
       );
       _logger.d('트랜잭션 해시: $result');
 
       return result; // 트랜잭션 해시 반환
     } catch (e, stackTrace) {
       _logger.e('블록체인 트랜잭션 에러: $e', e, stackTrace);
-      rethrow; // 스택 트레이스를 유지하면서 예외를 다시 던짐
+      rethrow;
     }
   }
 
-  /// 잔액을 확인하고 반환합니다.
-  Future<EtherAmount> getBalance() async {
+  /// 배치 트랜잭션을 보내는 함수
+  Future<String> sendBatchTransaction(
+      List<app_models.Transaction> transactions) async {
     try {
-      EtherAmount balance = await _client.getBalance(_senderAddress);
-      _logger.d('보내는 계정 잔액: ${balance.getValueInUnit(EtherUnit.ether)} ETH');
-      return balance;
+      if (transactions.isEmpty) {
+        throw Exception('보낼 거래가 없습니다.');
+      }
+
+      // IDs와 CIDs 분리
+      List<String> ids = transactions.map((tx) => tx.id).toList();
+      List<String> cids = transactions.map((tx) => tx.cid).toList();
+
+      // 블록체인 전송할 데이터 로깅
+      _logger.d('블록체인 배치 전송할 데이터: ${jsonEncode({'ids': ids, 'cids': cids})}');
+
+      // 트랜잭션 전송
+      final result = await _client.sendTransaction(
+        _credentials,
+        Transaction.callContract(
+          contract: _contract,
+          function: _storeTransactions,
+          parameters: [ids, cids],
+          from: _senderAddress,
+          // 필요에 따라 가스 한도와 가격을 설정
+          gasPrice: EtherAmount.inWei(BigInt.from(1000000000)), // 1 Gwei
+          maxGas: 200000 * transactions.length, // 각 거래당 가스 비용을 고려
+        ),
+        chainId: 11155111, // 네트워크에 따라 변경
+      );
+      _logger.d('배치 트랜잭션 해시: $result');
+
+      return result; // 트랜잭션 해시 반환
     } catch (e, stackTrace) {
-      _logger.e('잔액 조회 오류: $e', e, stackTrace);
+      _logger.e('블록체인 배치 트랜잭션 에러: $e', e, stackTrace);
       rethrow;
     }
   }
@@ -187,24 +177,21 @@ class BlockchainService extends ChangeNotifier {
 
       if (result.isEmpty) return null;
 
-      // 이중 리스트 처리
-      List<dynamic> transactionData =
-          result.isNotEmpty && result[0] is List ? result[0] : result;
-
+      // Transaction 객체 생성
       app_models.Transaction transaction =
-          app_models.Transaction.fromBlockchain(transactionData);
+          app_models.Transaction.fromBlockchain(result);
 
-      // Firestore에서 title 가져오기
-      if (transaction.id.isNotEmpty) {
-        final doc = await firestore.FirebaseFirestore.instance
-            .collection('transactions')
-            .doc(transaction.id)
-            .get();
-        if (doc.exists) {
-          String title = doc.get('title') as String? ?? '';
-          transaction.title = title;
-        }
-      }
+      // IPFS에서 데이터 가져오기
+      Map<String, dynamic> data = await _ipfsService.fetchData(transaction.cid);
+
+      // Transaction 객체 업데이트
+      transaction.title = data['title'] ?? '';
+      transaction.amount = (data['amount'] ?? 0).toDouble();
+      transaction.date =
+          DateTime.parse(data['date'] ?? DateTime.now().toString());
+      transaction.type = data['type'] ?? '';
+      transaction.category = data['category'] ?? '';
+      transaction.userId = data['userId'] ?? 'user123';
 
       return transaction;
     } catch (e, stackTrace) {
@@ -261,47 +248,31 @@ class BlockchainService extends ChangeNotifier {
             _transactionStoredEvent.decodeResults(event.topics!, event.data!);
         _logger.d('Decoded event data: $decoded');
 
-        // decoded는 [id, amount, date, transactionType, category]로 예상
-        if (decoded.length != 5) {
+        // decoded는 [id, cid]로 예상
+        if (decoded.length != 2) {
           throw Exception('Unexpected number of parameters in event data');
         }
 
         String id = decoded[0].toString();
-        BigInt amountBigInt = decoded[1] as BigInt;
-        BigInt dateUnix = decoded[2] as BigInt;
-        String transactionType = decoded[3].toString();
-        String category = decoded[4].toString();
+        String cid = decoded[1].toString();
 
-        double amount = amountBigInt.toDouble();
-        DateTime date =
-            DateTime.fromMillisecondsSinceEpoch(dateUnix.toInt() * 1000);
+        // IPFS에서 데이터 가져오기
+        Map<String, dynamic> data = await _ipfsService.fetchData(cid);
 
-        // Firestore에서 title 가져오기
-        String title = '';
-        if (id.isNotEmpty) {
-          firestore.DocumentSnapshot doc = await firestore
-              .FirebaseFirestore.instance
-              .collection('transactions')
-              .doc(id)
-              .get();
-          if (doc.exists) {
-            title = doc.get('title') as String? ?? '';
-          }
-        }
-
-        // Transaction 객체에 title 설정
+        // Transaction 객체 생성
         app_models.Transaction transaction = app_models.Transaction(
           id: id,
-          title: title,
-          amount: amount,
-          date: date,
-          type: transactionType,
-          category: category,
-          userId: 'user123', // 고정된 값
+          cid: cid,
+          title: data['title'] ?? '',
+          amount: (data['amount'] ?? 0).toDouble(),
+          date: DateTime.parse(data['date'] ?? DateTime.now().toString()),
+          type: data['type'] ?? '',
+          category: data['category'] ?? '',
+          userId: data['userId'] ?? 'user123',
         );
 
         _logger.d(
-            '새로운 블록체인 거래가 저장되었습니다: ID=$id, Title=$title, Amount=$amount, Date=$date, Type=$transactionType, Category=$category');
+            '새로운 블록체인 거래가 저장되었습니다: ID=$id, CID=$cid, Title=${transaction.title}');
 
         // 스트림에 추가하여 외부에서 구독할 수 있도록 함
         _transactionController.add(transaction);

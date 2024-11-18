@@ -47,8 +47,10 @@ class TransactionListScreen extends StatelessWidget {
               color: AppColors.kAccentColor,
             ),
             title: Text(tx.title, style: Theme.of(context).textTheme.bodyLarge),
-            subtitle: Text('${tx.amount.toStringAsFixed(0)}원',
-                style: Theme.of(context).textTheme.bodyMedium),
+            subtitle: Text(
+              '${tx.amount.toStringAsFixed(0)}원',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
             trailing: Text(
               '${tx.date.month}/${tx.date.day}',
               style: Theme.of(context).textTheme.bodyMedium,
