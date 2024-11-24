@@ -1,291 +1,321 @@
 // lib/services/blockchain_service.dart
 
 import 'dart:async';
-import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:web3dart/web3dart.dart';
-import 'package:http/io_client.dart';
-import 'package:flutter/foundation.dart';
+import 'package:http/http.dart';
 import 'package:logger/logger.dart';
 import '../models/transaction.dart' as app_models;
-import 'ipfs_service.dart'; // IPFSService 임포트
+import 'ipfs_service.dart';
+import 'package:flutter/foundation.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+
+class LoadingStatus {
+  final int current;
+  final int total;
+  final String message;
+  final DateTime timestamp;
+
+  LoadingStatus({
+    required this.current,
+    required this.total,
+    required this.message,
+    required this.timestamp,
+  });
+}
 
 class BlockchainService extends ChangeNotifier {
   late Web3Client _client;
   late DeployedContract _contract;
-  late ContractFunction _storeTransaction;
-  late ContractFunction _storeTransactions;
   late ContractFunction _getTransaction;
   late ContractFunction _getTransactionCount;
   late ContractEvent _transactionStoredEvent;
 
-  // 환경 변수에서 값 가져오기
-  final String _rpcUrl = dotenv.env['RPC_URL'] ?? '';
-  final String _privateKey = dotenv.env['PRIVATE_KEY'] ?? '';
-  final String _contractAddress = dotenv.env['CONTRACT_ADDRESS'] ?? '';
+  final String _rpcUrl =
+      dotenv.env['RPC_URL'] ?? (throw Exception('RPC_URL이 설정되지 않았습니다.'));
+  final String _contractAddress = dotenv.env['CONTRACT_ADDRESS'] ??
+      (throw Exception('CONTRACT_ADDRESS가 설정되지 않았습니다.'));
 
-  late Credentials _credentials;
-  late EthereumAddress _senderAddress;
+  final Logger _logger = Logger();
+  final IPFSService _ipfsService;
+  final Client _httpClient = Client();
 
-  // 이벤트 스트림 컨트롤러
   final StreamController<app_models.Transaction> _transactionController =
       StreamController.broadcast();
+  final StreamController<LoadingStatus> _loadingStatusController =
+      StreamController<LoadingStatus>.broadcast();
 
-  // Logger 인스턴스 생성
-  final Logger _logger = Logger();
-  final IPFSService _ipfsService = IPFSService(); // IPFSService 인스턴스 생성
-
-  // 외부에서 스트림을 구독할 수 있도록 제공
   Stream<app_models.Transaction> get transactionStream =>
       _transactionController.stream;
+  Stream<LoadingStatus> get loadingStatusStream =>
+      _loadingStatusController.stream;
 
-  BlockchainService() {
-    if (_rpcUrl.isEmpty || _privateKey.isEmpty || _contractAddress.isEmpty) {
-      throw Exception('환경 변수가 올바르게 설정되지 않았습니다.');
-    }
+  bool _isInitialized = false;
+  bool _isLoading = false;
 
-    // Web3Client 초기화 시 IOClient() 사용
-    _client = Web3Client(_rpcUrl, IOClient());
+  // 메모리 캐시
+  final Map<String, app_models.Transaction> _transactionCache = {};
 
-    // Credentials 및 Sender Address 초기화
-    _credentials = EthPrivateKey.fromHex(_privateKey);
-    _senderAddress = _credentials.address;
-    _logger.d('보내는 계정 주소 (개인 키 기반): ${_senderAddress.hex}');
+  BlockchainService({IPFSService? ipfsService})
+      : _ipfsService = ipfsService ?? IPFSService() {
+    _client = Web3Client(_rpcUrl, _httpClient);
   }
 
-  /// 초기화 함수
+  DeployedContract get contract => _contract;
+  bool get isInitialized => _isInitialized;
+  bool get isLoading => _isLoading;
+
   Future<void> init() async {
+    if (_isInitialized) return;
+
     try {
-      // ABI 로드
+      _isLoading = true;
+      notifyListeners();
+
       String abiString =
           await rootBundle.loadString('assets/TransactionStorageABI.json');
-      _logger.d('Loaded ABI string: $abiString');
+      _logger.d('ABI 로드 완료');
 
-      // 스마트 계약 주소
       final contractAddr = EthereumAddress.fromHex(_contractAddress);
-
-      // 계약 ABI 및 인스턴스 생성
       final contractAbi =
           ContractAbi.fromJson(abiString, 'HighValueDataStorage');
-      _contract = DeployedContract(
-        contractAbi,
-        contractAddr,
-      );
+      _contract = DeployedContract(contractAbi, contractAddr);
 
-      // 함수 가져오기
-      _storeTransaction = _contract.function('storeTransaction');
-      _storeTransactions = _contract.function('storeTransactions');
       _getTransaction = _contract.function('getTransaction');
       _getTransactionCount = _contract.function('getTransactionCount');
-
-      // 이벤트 가져오기
       _transactionStoredEvent = _contract.event('TransactionStored');
 
-      // 보내는 계정 주소 출력
-      _logger.d('보내는 계정 주소: ${_senderAddress.hex}');
-
-      // 이벤트 리스닝 시작
       _listenToTransactionEvents();
+
+      _isInitialized = true;
+      _logger.d('BlockchainService 초기화 완료');
     } catch (e, stackTrace) {
-      _logger.e('스마트 계약 초기화 오류: $e', e, stackTrace);
+      _logger.e('초기화 오류: $e', e, stackTrace);
       rethrow;
+    } finally {
+      _isLoading = false;
+      notifyListeners();
     }
   }
 
-  /// 단일 트랜잭션을 보내는 함수
-  Future<String> sendTransaction(app_models.Transaction tx) async {
+  /// 페이지네이션을 지원하는 트랜잭션 조회 메서드
+  Future<List<app_models.Transaction>> fetchTransactions({
+    required int start,
+    required int limit,
+  }) async {
+    if (!_isInitialized) await init();
+
     try {
-      // CID가 있는지 확인
-      if (tx.cid.isEmpty) {
-        throw Exception('CID가 없습니다. IPFS 업로드 후 CID를 받아야 합니다.');
+      _isLoading = true;
+      notifyListeners();
+
+      BigInt count = await getTransactionCount();
+      int totalCount = count.toInt();
+
+      if (totalCount == 0 || start >= totalCount) {
+        return [];
       }
 
-      // 블록체인 전송할 데이터 로깅
-      _logger.d('블록체인 전송할 데이터: ${jsonEncode({'id': tx.id, 'cid': tx.cid})}');
+      _loadingStatusController.add(LoadingStatus(
+        current: start,
+        total: totalCount,
+        message: '트랜잭션 조회 중...',
+        timestamp: DateTime.now(),
+      ));
 
-      // 트랜잭션 전송
-      final result = await _client.sendTransaction(
-        _credentials,
-        Transaction.callContract(
-          contract: _contract,
-          function: _storeTransaction,
-          parameters: [tx.id, tx.cid],
-          maxGas: 200000,
-          gasPrice: EtherAmount.inWei(BigInt.from(1000000000)), // 1 Gwei
-        ),
-        chainId: 11155111, // 네트워크에 따라 변경
-      );
-      _logger.d('트랜잭션 해시: $result');
+      List<app_models.Transaction> transactions = [];
 
-      return result; // 트랜잭션 해시 반환
-    } catch (e, stackTrace) {
-      _logger.e('블록체인 트랜잭션 에러: $e', e, stackTrace);
-      rethrow;
-    }
-  }
-
-  /// 배치 트랜잭션을 보내는 함수
-  Future<String> sendBatchTransaction(
-      List<app_models.Transaction> transactions) async {
-    try {
-      if (transactions.isEmpty) {
-        throw Exception('보낼 거래가 없습니다.');
+      // 가장 최근 트랜잭션부터 가져오기 위해 인덱스 계산
+      int endIndex = totalCount - 1 - start;
+      int startIndex = endIndex - limit + 1;
+      if (startIndex < 0) {
+        startIndex = 0;
       }
 
-      // IDs와 CIDs 분리
-      List<String> ids = transactions.map((tx) => tx.id).toList();
-      List<String> cids = transactions.map((tx) => tx.cid).toList();
+      // 병렬 처리로 트랜잭션 조회 속도 향상
+      List<Future<app_models.Transaction?>> futures = [];
+      for (int i = endIndex; i >= startIndex; i--) {
+        futures.add(getTransactionByIndex(i));
+      }
 
-      // 블록체인 전송할 데이터 로깅
-      _logger.d('블록체인 배치 전송할 데이터: ${jsonEncode({'ids': ids, 'cids': cids})}');
+      final results = await Future.wait(futures);
 
-      // 트랜잭션 전송
-      final result = await _client.sendTransaction(
-        _credentials,
-        Transaction.callContract(
-          contract: _contract,
-          function: _storeTransactions,
-          parameters: [ids, cids],
-          from: _senderAddress,
-          // 필요에 따라 가스 한도와 가격을 설정
-          gasPrice: EtherAmount.inWei(BigInt.from(1000000000)), // 1 Gwei
-          maxGas: 200000 * transactions.length, // 각 거래당 가스 비용을 고려
-        ),
-        chainId: 11155111, // 네트워크에 따라 변경
-      );
-      _logger.d('배치 트랜잭션 해시: $result');
-
-      return result; // 트랜잭션 해시 반환
-    } catch (e, stackTrace) {
-      _logger.e('블록체인 배치 트랜잭션 에러: $e', e, stackTrace);
-      rethrow;
-    }
-  }
-
-  /// 특정 인덱스의 거래를 가져오는 함수
-  Future<app_models.Transaction?> getTransactionByIndex(int index) async {
-    try {
-      final result = await _client.call(
-        contract: _contract,
-        function: _getTransaction,
-        params: [BigInt.from(index)],
-      );
-
-      _logger.d(
-          'getTransactionByIndex($index) 결과 타입: ${result.runtimeType}, 값: $result');
-
-      if (result.isEmpty) return null;
-
-      // Transaction 객체 생성
-      app_models.Transaction transaction =
-          app_models.Transaction.fromBlockchain(result);
-
-      // IPFS에서 데이터 가져오기
-      Map<String, dynamic> data = await _ipfsService.fetchData(transaction.cid);
-
-      // Transaction 객체 업데이트
-      transaction.title = data['title'] ?? '';
-      transaction.amount = (data['amount'] ?? 0).toDouble();
-      transaction.date =
-          DateTime.parse(data['date'] ?? DateTime.now().toString());
-      transaction.type = data['type'] ?? '';
-      transaction.category = data['category'] ?? '';
-      transaction.userId = data['userId'] ?? 'user123';
-
-      return transaction;
-    } catch (e, stackTrace) {
-      _logger.e('블록체인 트랜잭션 조회 에러: $e', e, stackTrace);
-      return null;
-    }
-  }
-
-  /// 모든 거래를 블록체인에서 가져오는 함수
-  Future<List<app_models.Transaction>> fetchAllTransactions() async {
-    List<app_models.Transaction> transactions = [];
-    try {
-      final count = await getTransactionCount();
-      _logger.d('총 거래 수: $count');
-
-      for (int i = 0; i < count.toInt(); i++) {
-        final tx = await getTransactionByIndex(i);
+      for (var tx in results) {
         if (tx != null) {
           transactions.add(tx);
         }
       }
+
+      _loadingStatusController.add(LoadingStatus(
+        current: totalCount - startIndex,
+        total: totalCount,
+        message: '트랜잭션 로드 완료',
+        timestamp: DateTime.now(),
+      ));
+
+      return transactions;
     } catch (e, stackTrace) {
-      _logger.e('모든 거래 불러오기 오류: $e', e, stackTrace);
+      _logger.e('트랜잭션 조회 오류: $e', e, stackTrace);
+      rethrow;
+    } finally {
+      _isLoading = false;
+      notifyListeners();
     }
-    return transactions;
   }
 
-  /// 거래 수 가져오기
   Future<BigInt> getTransactionCount() async {
+    if (!_isInitialized) await init();
+
     try {
       final result = await _client.call(
         contract: _contract,
         function: _getTransactionCount,
         params: [],
       );
-      _logger.d('getTransactionCount 결과: $result');
-      return result.first as BigInt;
+
+      if (result.isEmpty) {
+        throw Exception('스마트 컨트랙트로부터 예상치 못한 응답을 받았습니다.');
+      }
+
+      _logger.d('전체 트랜잭션 수 조회 결과: ${result[0]}');
+      return result[0] as BigInt;
     } catch (e, stackTrace) {
-      _logger.e('getTransactionCount 호출 에러: $e', e, stackTrace);
+      _logger.e('트랜잭션 수 조회 오류: $e', e, stackTrace);
       rethrow;
     }
   }
 
-  /// 이벤트 스트림 리스닝 함수
+  Future<app_models.Transaction?> getTransactionByIndex(int index) async {
+    if (!_isInitialized) await init();
+
+    try {
+      // 캐시 확인
+      if (_transactionCache.containsKey(index.toString())) {
+        return _transactionCache[index.toString()];
+      }
+
+      final result = await _client.call(
+        contract: _contract,
+        function: _getTransaction,
+        params: [BigInt.from(index)],
+      );
+
+      if (result.isEmpty || result.length < 2) return null;
+
+      String id = result[0].toString();
+      String cid = result[1].toString();
+
+      if (cid.isEmpty) {
+        final dbData = await fetchFromDatabase(id);
+        if (dbData == null) return null;
+
+        final transaction = app_models.Transaction.fromMap(dbData, id);
+        _transactionCache[index.toString()] = transaction;
+        return transaction;
+      }
+
+      // IPFS 데이터 가져오기
+      Map<String, dynamic>? ipfsData;
+      try {
+        ipfsData = await _ipfsService.fetchData(cid);
+      } catch (e) {
+        _logger.e('IPFS 데이터 가져오기 오류: $e');
+        // 예외를 다시 던지거나 null을 반환하여 호출자가 처리하도록 할 수 있습니다.
+        return null;
+      }
+
+      if (ipfsData == null) return null;
+
+      final transaction = app_models.Transaction(
+        id: id,
+        cid: cid,
+        txHash: '',
+        title: ipfsData['title'] ?? '',
+        amount: double.tryParse(ipfsData['amount'].toString()) ?? 0.0,
+        date: DateTime.tryParse(ipfsData['date'] ?? '') ?? DateTime.now(),
+        type: ipfsData['type'] ?? '',
+        category: ipfsData['category'] ?? '',
+        userId: ipfsData['userId'] ?? 'userId',
+      );
+
+      _transactionCache[index.toString()] = transaction;
+      return transaction;
+    } catch (e, stackTrace) {
+      _logger.e('트랜잭션 조회 오류: $e', e, stackTrace);
+      return null;
+    }
+  }
+
   void _listenToTransactionEvents() {
     final eventStream = _client.events(FilterOptions.events(
       contract: _contract,
       event: _transactionStoredEvent,
     ));
 
-    eventStream.listen((event) async {
-      try {
-        final decoded =
-            _transactionStoredEvent.decodeResults(event.topics!, event.data!);
-        _logger.d('Decoded event data: $decoded');
+    eventStream.listen(
+      (event) async {
+        try {
+          final decoded =
+              _transactionStoredEvent.decodeResults(event.topics!, event.data!);
+          if (decoded.length != 2) throw Exception('잘못된 이벤트 데이터');
 
-        // decoded는 [id, cid]로 예상
-        if (decoded.length != 2) {
-          throw Exception('Unexpected number of parameters in event data');
+          String id = decoded[0].toString();
+          String cid = decoded[1].toString();
+          String txHash = event.transactionHash ?? '';
+
+          final ipfsData = await _ipfsService.fetchData(cid);
+          if (ipfsData == null) return;
+
+          final transaction = app_models.Transaction(
+            id: id,
+            cid: cid,
+            txHash: txHash,
+            title: ipfsData['title'] ?? '',
+            amount: double.tryParse(ipfsData['amount'].toString()) ?? 0.0,
+            date: DateTime.tryParse(ipfsData['date'] ?? '') ?? DateTime.now(),
+            type: ipfsData['type'] ?? '',
+            category: ipfsData['category'] ?? '',
+            userId: ipfsData['userId'] ?? 'userId',
+          );
+
+          _transactionCache[id] = transaction;
+          _transactionController.add(transaction);
+        } catch (e, stackTrace) {
+          _logger.e('이벤트 처리 오류: $e', e, stackTrace);
         }
+      },
+      onError: (error) => _logger.e('이벤트 스트림 오류: $error'),
+      onDone: () => _logger.d('이벤트 스트림 종료'),
+    );
+  }
 
-        String id = decoded[0].toString();
-        String cid = decoded[1].toString();
+  Future<Map<String, dynamic>?> fetchFromDatabase(String id) async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('transactions')
+          .doc(id)
+          .get();
 
-        // IPFS에서 데이터 가져오기
-        Map<String, dynamic> data = await _ipfsService.fetchData(cid);
-
-        // Transaction 객체 생성
-        app_models.Transaction transaction = app_models.Transaction(
-          id: id,
-          cid: cid,
-          title: data['title'] ?? '',
-          amount: (data['amount'] ?? 0).toDouble(),
-          date: DateTime.parse(data['date'] ?? DateTime.now().toString()),
-          type: data['type'] ?? '',
-          category: data['category'] ?? '',
-          userId: data['userId'] ?? 'user123',
-        );
-
-        _logger.d(
-            '새로운 블록체인 거래가 저장되었습니다: ID=$id, CID=$cid, Title=${transaction.title}');
-
-        // 스트림에 추가하여 외부에서 구독할 수 있도록 함
-        _transactionController.add(transaction);
-      } catch (e, stackTrace) {
-        _logger.e('이벤트 처리 에러: $e', e, stackTrace);
-      }
-    });
+      return doc.exists ? doc.data() : null;
+    } catch (e) {
+      _logger.e('Firestore 조회 오류: $e');
+      return null;
+    }
   }
 
   @override
   void dispose() {
     _transactionController.close();
+    _loadingStatusController.close();
     _client.dispose();
+    _httpClient.close();
     super.dispose();
+  }
+
+  /// 캐시 초기화
+  void clearCache() {
+    _transactionCache.clear();
+    notifyListeners();
   }
 }

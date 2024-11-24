@@ -1,5 +1,3 @@
-// lib/screens/stats_screen.dart
-
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart' as firestore;
 import 'package:fl_chart/fl_chart.dart';
@@ -7,6 +5,7 @@ import '../models/monthly_summary.dart';
 import '../models/transaction.dart' as models;
 import '../widgets/chart_legend.dart';
 import '../colors.dart'; // AppColors 임포트
+import 'package:logger/logger.dart'; // Logger 임포트
 
 class StatsScreen extends StatefulWidget {
   const StatsScreen({super.key});
@@ -24,6 +23,8 @@ class StatsScreenState extends State<StatsScreen>
   // 애니메이션 컨트롤러 추가
   late AnimationController _animationController;
   late Animation<double> _animation;
+
+  final Logger _logger = Logger();
 
   @override
   void initState() {
@@ -62,10 +63,31 @@ class StatsScreenState extends State<StatsScreen>
 
       for (var doc in snapshot.docs) {
         Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
-        DateTime date = (data['date'] as firestore.Timestamp).toDate();
+
+        // 'date' 필드가 null인지 확인
+        if (data['date'] == null) {
+          _logger.w("Document ${doc.id} has null 'date' field. Skipping.");
+          continue; // 또는 기본값 설정
+        }
+
+        DateTime date;
+
+        try {
+          date = (data['date'] as firestore.Timestamp).toDate();
+        } catch (e) {
+          _logger.e("Error parsing 'date' field in document ${doc.id}: $e");
+          continue; // 또는 기본값 설정
+        }
+
         String month = '${date.year}-${date.month.toString().padLeft(2, '0')}';
-        double amount = (data['amount'] as num).toDouble();
-        String type = data['type'];
+
+        // 'amount' 필드가 null인지 확인하고 기본값 설정
+        double amount = (data['amount'] as num?)?.toDouble() ?? 0.0;
+
+        // 'type' 필드가 null인지 확인하고 기본값 설정
+        String type = data['type'] ?? 'expense'; // 기본값을 'expense'로 설정
+
+        // 'category' 필드가 null인지 확인하고 기본값 설정
         String category = data['category'] ?? '기타 지출';
 
         // 월별 합계 계산
@@ -88,6 +110,8 @@ class StatsScreenState extends State<StatsScreen>
         if (!monthlyTransactions.containsKey(month)) {
           monthlyTransactions[month] = [];
         }
+
+        // Transaction 객체 생성 시, 필요한 필드가 null인지 확인
         models.Transaction transaction =
             models.Transaction.fromMap(data, doc.id);
         monthlyTransactions[month]!.add(transaction);
@@ -103,8 +127,11 @@ class StatsScreenState extends State<StatsScreen>
         _animationController.forward();
       });
     } catch (e) {
-      print('데이터 처리 오류: $e');
+      _logger.e('데이터 처리 오류: $e');
       // 에러 상태를 사용자에게 알리기 위한 추가 로직 필요 시 구현
+      setState(() {
+        // 예: 에러 메시지 표시
+      });
     }
   }
 
@@ -210,7 +237,7 @@ class StatsScreenState extends State<StatsScreen>
                   children: [
                     // 월별 수입/지출 라인차트
                     const SizedBox(height: 16),
-                    ChartLegend(
+                    const ChartLegend(
                       incomeColor: Colors.greenAccent,
                       expenseColor: Colors.redAccent,
                     ),
@@ -290,8 +317,10 @@ class StatsScreenState extends State<StatsScreen>
                               sideTitles: SideTitles(showTitles: false),
                             ),
                           ),
+                          minY: 0,
                           gridData: FlGridData(show: false),
                           borderData: FlBorderData(show: false),
+                          // 애니메이션 추가
                           lineTouchData: LineTouchData(
                             touchTooltipData: LineTouchTooltipData(
                               tooltipBgColor: Colors.blueAccent,
@@ -377,7 +406,6 @@ class StatsScreenState extends State<StatsScreen>
                             '수입: ${summary.totalIncome.toStringAsFixed(0)}원, 지출: ${summary.totalExpense.toStringAsFixed(0)}원',
                           ),
                           children: transactions.map((tx) {
-                            // 널 체크는 이미 되어 있으므로 생략
                             return ListTile(
                               leading: Icon(
                                 tx.type == 'income'

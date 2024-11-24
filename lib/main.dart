@@ -1,17 +1,23 @@
-// lib/main.dart
+// main.dart
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'providers/transaction_provider.dart';
-import 'providers/blockchain_transaction_provider.dart';
+import 'providers/meta_mask_provider.dart'; // MetaMaskProvider 임포트
+import 'providers/settings_provider.dart'; // SettingsProvider 임포트
+import 'providers/blockchain_transaction_provider.dart'; // BlockchainTransactionProvider 임포트
 import 'screens/home_screen.dart';
 import 'screens/blockchain_transactions_screen.dart';
+import 'screens/meta_mask_demo_screen.dart'; // MetaMaskDemoScreen 임포트
+import 'screens/initial_prompt_screen.dart'; // InitialPromptScreen 임포트
+import 'screens/settings_screen.dart'; // SettingsScreen 임포트
 import 'colors.dart'; // AppColors 임포트
 import 'package:flutter_dotenv/flutter_dotenv.dart'; // flutter_dotenv 임포트
-import 'services/blockchain_service.dart'; // BlockchainService 임포트
 import 'package:logger/logger.dart'; // Logger 임포트
+import 'services/navigation_service.dart'; // NavigationService 임포트
+import 'services/blockchain_service.dart'; // BlockchainService 임포트
 
 final Logger _logger = Logger(
   printer: PrettyPrinter(
@@ -31,11 +37,12 @@ Future<void> main() async {
     await dotenv.load();
 
     _logger.d('dotenv 파일이 성공적으로 로드되었습니다.');
-    _logger.d('RPC_URL: ${dotenv.env['RPC_URL']}');
-    _logger.d('PRIVATE_KEY: ${dotenv.env['PRIVATE_KEY']}');
-    _logger.d('CONTRACT_ADDRESS: ${dotenv.env['CONTRACT_ADDRESS']}');
-    _logger.d('PINATA_API_KEY: ${dotenv.env['PINATA_API_KEY']}');
-    _logger.d('PINATA_SECRET_API_KEY: ${dotenv.env['PINATA_SECRET_API_KEY']}');
+    // 민감한 정보는 로그에 남기지 않도록 주의
+    _logger.d('RPC_URL: [REDACTED]');
+    _logger.d('CONTRACT_ADDRESS: [REDACTED]');
+    _logger.d('PINATA_API_KEY: [REDACTED]');
+    _logger.d('PINATA_SECRET_API_KEY: [REDACTED]');
+    _logger.d('WALLETCONNECT_PROJECT_ID: [REDACTED]');
   } catch (e) {
     _logger.e('dotenv 파일을 로드하지 못했습니다. 오류: $e');
   }
@@ -49,7 +56,7 @@ Future<void> main() async {
     _logger.e('Firebase 초기화 오류: $e');
   }
 
-  // Initialize BlockchainService before providing
+  // BlockchainService 초기화
   BlockchainService blockchainService;
   try {
     blockchainService = BlockchainService();
@@ -63,24 +70,49 @@ Future<void> main() async {
   runApp(
     MultiProvider(
       providers: [
+        // 1. SettingsProvider 등록
         ChangeNotifierProvider(
-          create: (_) => TransactionProvider(blockchainService),
+          create: (_) => SettingsProvider(),
         ),
+        // 2. MetaMaskProvider 등록
+        ChangeNotifierProvider(
+          create: (_) => MetaMaskProvider(),
+        ),
+        // 3. BlockchainService 등록 (ChangeNotifierProvider 사용)
         ChangeNotifierProvider<BlockchainService>.value(
           value: blockchainService,
         ),
-        ChangeNotifierProxyProvider<BlockchainService,
-            BlockchainTransactionProvider>(
-          create: (_) => BlockchainTransactionProvider(),
-          update: (context, blockchainService, previous) {
-            if (previous == null) {
-              final provider = BlockchainTransactionProvider();
-              provider.update(blockchainService);
-              return provider;
+        // 4. TransactionProvider를 ProxyProvider로 등록하여 SettingsProvider와 MetaMaskProvider의 변경을 반영
+        ChangeNotifierProxyProvider3<SettingsProvider, MetaMaskProvider,
+            BlockchainService, TransactionProvider>(
+          create: (context) => TransactionProvider(
+            Provider.of<BlockchainService>(context, listen: false),
+            Provider.of<MetaMaskProvider>(context, listen: false),
+            Provider.of<SettingsProvider>(context, listen: false)
+                .transactionThreshold,
+          ),
+          update: (context, settingsProvider, metaMaskProvider,
+              blockchainService, transactionProvider) {
+            if (transactionProvider == null) {
+              return TransactionProvider(
+                blockchainService,
+                metaMaskProvider,
+                settingsProvider.transactionThreshold,
+              );
             } else {
-              previous.update(blockchainService);
-              return previous;
+              transactionProvider
+                  .updateThreshold(settingsProvider.transactionThreshold);
+              return transactionProvider;
             }
+          },
+        ),
+        // 5. BlockchainTransactionProvider 등록
+        ChangeNotifierProvider<BlockchainTransactionProvider>(
+          create: (context) {
+            // BlockchainService를 받아와서 생성자에 전달
+            BlockchainService blockchainService =
+                Provider.of<BlockchainService>(context, listen: false);
+            return BlockchainTransactionProvider(blockchainService);
           },
         ),
       ],
@@ -96,6 +128,7 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: '가계부 앱',
+      navigatorKey: NavigationService.navigatorKey, // 글로벌 Navigator Key 할당
       theme: ThemeData(
         brightness: Brightness.dark,
         primaryColor: AppColors.kBackgroundColor,
@@ -145,10 +178,15 @@ class MyApp extends StatelessWidget {
           ),
         ),
       ),
-      home: const HomeScreen(),
+      home: const InitialPromptScreen(), // 초기 프롬프트 화면으로 설정
       routes: {
         '/blockchain_transactions': (context) =>
             const BlockchainTransactionsScreen(),
+        '/meta_mask_demo': (context) =>
+            const MetaMaskDemoScreen(), // MetaMaskDemoScreen 라우트 추가
+        '/home': (context) => const HomeScreen(), // 홈 화면 라우트 추가
+        '/settings': (context) =>
+            const SettingsScreen(), // SettingsScreen 라우트 추가
       },
     );
   }

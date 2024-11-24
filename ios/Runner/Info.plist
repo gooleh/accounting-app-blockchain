@@ -2,6 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <!-- 기존 설정들 -->
     <key>CADisableMinimumFrameDurationOnPhone</key>
     <true/>
     <key>CFBundleDevelopmentRegion</key>
@@ -53,7 +54,7 @@
     <dict>
         <key>NSAllowsArbitraryLoads</key>
         <true/>
-        <!-- 또는 특정 도메인만 허용 -->
+        <!-- 특정 도메인만 허용하려면 주석 해제 후 설정 -->
         <!--
         <key>NSExceptionDomains</key>
         <dict>
@@ -65,5 +66,22 @@
         </dict>
         -->
     </dict>
+    
+    <!-- MetaMask URL 스킴 추가 -->
+    <key>LSApplicationQueriesSchemes</key>
+    <array>
+        <string>metamask</string>
+    </array>
+    
+    <!-- CFBundleURLTypes 추가 -->
+    <key>CFBundleURLTypes</key>
+    <array>
+      <dict>
+        <key>CFBundleURLSchemes</key>
+        <array>
+          <string>metamask</string>
+        </array>
+      </dict>
+    </array>
 </dict>
 </plist>

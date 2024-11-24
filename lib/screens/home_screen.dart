@@ -1,5 +1,3 @@
-// lib/screens/home_screen.dart
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'transaction_list_screen.dart';
@@ -7,6 +5,7 @@ import 'add_transaction_screen.dart';
 import 'stats_screen.dart';
 import 'settings_screen.dart';
 import '../providers/transaction_provider.dart';
+import '../providers/meta_mask_provider.dart'; // MetaMaskProvider 임포트
 import '../models/transaction.dart' as models;
 import '../colors.dart';
 import '../icons.dart'; // CategoryIcons 임포트
@@ -31,7 +30,7 @@ class HomeScreenState extends State<HomeScreen>
     const SettingsScreen(),
   ];
 
-  // 애니메이션 컨트롤러 추가
+  // 애니메이션 컨트롤러
   late AnimationController _animationController;
 
   @override
@@ -108,7 +107,7 @@ class HomeTab extends StatefulWidget {
 }
 
 class HomeTabState extends State<HomeTab> with SingleTickerProviderStateMixin {
-  // 애니메이션 컨트롤러 추가
+  // 애니메이션 컨트롤러
   late AnimationController _animationController;
 
   @override
@@ -134,22 +133,22 @@ class HomeTabState extends State<HomeTab> with SingleTickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<TransactionProvider>(
-      builder: (context, provider, child) {
-        if (provider.isLoading) {
+    return Consumer2<TransactionProvider, MetaMaskProvider>(
+      builder: (context, transactionProvider, metaMaskProvider, child) {
+        if (transactionProvider.isLoading) {
           return const Center(child: CircularProgressIndicator());
         }
 
-        if (provider.error != null) {
+        if (transactionProvider.error != null) {
           return Center(
             child: Text(
-              provider.error!,
+              transactionProvider.error!,
               style: Theme.of(context).textTheme.bodyLarge,
             ),
           );
         }
 
-        final transactions = provider.transactions;
+        final transactions = transactionProvider.transactions;
 
         // 총 수입 및 지출 계산
         double totalIncome = transactions
@@ -169,12 +168,15 @@ class HomeTabState extends State<HomeTab> with SingleTickerProviderStateMixin {
 
         return SingleChildScrollView(
           child: Padding(
-            padding: const EdgeInsets.all(16.0), // 전체 패딩 추가
+            padding: const EdgeInsets.all(16.0), // 패딩 추가
             child: FadeTransition(
               opacity: _animationController,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  // MetaMask 연결 상태 표시
+                  _buildMetaMaskStatus(metaMaskProvider),
+                  const SizedBox(height: 16),
                   // 잔액 카드
                   _buildBalanceCard(balance),
                   const SizedBox(height: 16),
@@ -214,6 +216,47 @@ class HomeTabState extends State<HomeTab> with SingleTickerProviderStateMixin {
     );
   }
 
+  // MetaMask 연결 상태 표시 위젯
+  Widget _buildMetaMaskStatus(MetaMaskProvider metaMaskProvider) {
+    bool isConnected = metaMaskProvider.isConnected;
+    return Row(
+      children: [
+        Icon(
+          isConnected ? Icons.check_circle : Icons.error,
+          color: isConnected ? Colors.green : Colors.red,
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            isConnected
+                ? 'MetaMask 연결됨: ${_shortenAddress(metaMaskProvider.walletAddress)}'
+                : 'MetaMask 연결되지 않음',
+            style: TextStyle(
+              color: isConnected ? Colors.green : Colors.red,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+        if (!isConnected)
+          ElevatedButton(
+            onPressed: () async {
+              await metaMaskProvider.connect();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.kAccentColor,
+            ),
+            child: const Text('연결'),
+          ),
+      ],
+    );
+  }
+
+  // 지갑 주소를 간략하게 표시하는 헬퍼 메서드
+  String _shortenAddress(String address) {
+    if (address.length <= 10) return address;
+    return '${address.substring(0, 6)}...${address.substring(address.length - 4)}';
+  }
+
   Widget _buildBalanceCard(double balance) {
     return ScaleTransition(
       scale: CurvedAnimation(
@@ -234,7 +277,7 @@ class HomeTabState extends State<HomeTab> with SingleTickerProviderStateMixin {
               Text('현재 잔액', style: Theme.of(context).textTheme.headlineSmall),
               const SizedBox(height: 8),
               Text(
-                '${balance.toStringAsFixed(0)}원',
+                '${balance.toStringAsFixed(0)} 원',
                 style: Theme.of(context).textTheme.headlineMedium!.copyWith(
                       fontSize: 32,
                       fontWeight: FontWeight.bold,
@@ -272,13 +315,13 @@ class HomeTabState extends State<HomeTab> with SingleTickerProviderStateMixin {
                     const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
                 child: Column(
                   children: [
-                    Icon(FontAwesomeIcons.arrowCircleDown,
+                    const Icon(FontAwesomeIcons.circleArrowDown,
                         color: Colors.greenAccent, size: 30),
                     const SizedBox(height: 8),
                     Text('총 수입', style: Theme.of(context).textTheme.bodyLarge),
                     const SizedBox(height: 8),
                     Text(
-                      '${totalIncome.toStringAsFixed(0)}원',
+                      '${totalIncome.toStringAsFixed(0)} 원',
                       style: Theme.of(context).textTheme.bodyLarge!.copyWith(
                             fontSize: 18,
                             fontWeight: FontWeight.bold,
@@ -313,13 +356,13 @@ class HomeTabState extends State<HomeTab> with SingleTickerProviderStateMixin {
                     const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
                 child: Column(
                   children: [
-                    Icon(FontAwesomeIcons.arrowCircleUp,
+                    const Icon(FontAwesomeIcons.circleArrowUp,
                         color: Colors.redAccent, size: 30),
                     const SizedBox(height: 8),
                     Text('총 지출', style: Theme.of(context).textTheme.bodyLarge),
                     const SizedBox(height: 8),
                     Text(
-                      '${totalExpense.toStringAsFixed(0)}원',
+                      '${totalExpense.toStringAsFixed(0)} 원',
                       style: Theme.of(context).textTheme.bodyLarge!.copyWith(
                             fontSize: 18,
                             fontWeight: FontWeight.bold,
@@ -406,7 +449,7 @@ class HomeTabState extends State<HomeTab> with SingleTickerProviderStateMixin {
                   title: Text(tx.title,
                       style: Theme.of(context).textTheme.bodyLarge),
                   subtitle: Text(
-                      '${tx.type == 'income' ? '수입' : '지출'}: ${tx.amount.toStringAsFixed(0)}원'),
+                      '${tx.type == 'income' ? '수입' : '지출'}: ${tx.amount.toStringAsFixed(0)} 원'),
                   trailing: Text(
                     '${tx.date.month}월 ${tx.date.day}일',
                     style: const TextStyle(fontSize: 12, color: Colors.grey),
@@ -505,7 +548,9 @@ class HomeTabState extends State<HomeTab> with SingleTickerProviderStateMixin {
           ),
         ),
         leftTitles: AxisTitles(
-          sideTitles: SideTitles(showTitles: false), // y축 레이블 숨기기
+          sideTitles: SideTitles(
+            showTitles: false, // y축 레이블 숨기기
+          ),
         ),
         topTitles: AxisTitles(
           sideTitles: SideTitles(showTitles: false),
@@ -517,7 +562,7 @@ class HomeTabState extends State<HomeTab> with SingleTickerProviderStateMixin {
       minY: 0,
       gridData: FlGridData(show: false),
       borderData: FlBorderData(show: false),
-      // 애니메이션 추가
+      // 터치 툴팁 추가
       lineTouchData: LineTouchData(
         touchTooltipData: LineTouchTooltipData(
           tooltipBgColor: Colors.blueAccent,
@@ -525,7 +570,7 @@ class HomeTabState extends State<HomeTab> with SingleTickerProviderStateMixin {
             return touchedSpots.map((spot) {
               String label = spot.bar.color == Colors.greenAccent ? '수입' : '지출';
               return LineTooltipItem(
-                '$label: ${spot.y.toStringAsFixed(0)}원',
+                '$label: ${spot.y.toStringAsFixed(0)} 원',
                 const TextStyle(color: Colors.white),
               );
             }).toList();

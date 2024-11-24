@@ -1,13 +1,15 @@
-// lib/providers/transaction_provider.dart
-
 import 'dart:async';
-import 'package:flutter/foundation.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:logger/logger.dart';
 import '../models/transaction.dart' as app_models;
 import '../services/blockchain_service.dart';
 import '../services/ipfs_service.dart';
-import 'package:shared_preferences/shared_preferences.dart'; // SharedPreferences 임포트
+import 'package:flutter/material.dart';
+import 'package:uuid/uuid.dart';
+import 'package:web3dart/web3dart.dart';
+import 'package:web3dart/crypto.dart';
+import '../providers/meta_mask_provider.dart'; // MetaMaskProvider 임포트
+import '../services/navigation_service.dart'; // NavigationService 임포트
 
 class TransactionProvider with ChangeNotifier {
   final List<app_models.Transaction> _transactions = [];
@@ -15,7 +17,7 @@ class TransactionProvider with ChangeNotifier {
       FirebaseFirestore.instance.collection('transactions');
 
   List<app_models.Transaction> get transactions => _transactions;
-  bool _isLoading = true;
+  bool _isLoading = false;
   bool get isLoading => _isLoading;
   String? _error;
   String? get error => _error;
@@ -25,32 +27,27 @@ class TransactionProvider with ChangeNotifier {
 
   // 배치 전송을 위한 임시 리스트
   final List<app_models.Transaction> _batchList = [];
-  final int _batchSize = 10; // 배치 크기를 10으로 설정
+  final int _batchSize = 3; // 배치 크기 설정
 
   final BlockchainService _blockchainService;
+  final MetaMaskProvider _metaMaskProvider; // MetaMaskProvider 인스턴스
 
   // 사용자 설정으로부터 로드되는 기준 금액
   int _thresholdAmount = 1000000; // 기본값 설정
+  int get thresholdAmount => _thresholdAmount;
 
-  TransactionProvider(this._blockchainService) {
+  TransactionProvider(
+      this._blockchainService, this._metaMaskProvider, this._thresholdAmount) {
     fetchTransactions();
     _blockchainService.init(); // BlockchainService 초기화 호출
-    _loadThreshold(); // 기준 금액 로드
     _blockchainService.transactionStream.listen((tx) {
       // 새로운 블록체인 거래가 추가되면 Firestore에 업데이트
       _transactionsCollection
           .doc(tx.id)
-          .update({'cid': tx.cid}).catchError((e) {
+          .update({'txHash': tx.txHash, 'status': 'confirmed'}).catchError((e) {
         _logger.e('Firestore 업데이트 에러: $e');
       });
     });
-  }
-
-  // SharedPreferences에서 기준 금액을 로드하는 메서드
-  Future<void> _loadThreshold() async {
-    final prefs = await SharedPreferences.getInstance();
-    _thresholdAmount = prefs.getInt('transaction_threshold') ?? 1000000;
-    _logger.d('기준 금액 로드 완료: $_thresholdAmount 원');
   }
 
   // 기준 금액을 업데이트하는 메서드
@@ -61,6 +58,9 @@ class TransactionProvider with ChangeNotifier {
   }
 
   void fetchTransactions() {
+    _isLoading = true;
+    notifyListeners();
+
     _transactionsCollection
         .orderBy('date', descending: true)
         .snapshots()
@@ -86,50 +86,122 @@ class TransactionProvider with ChangeNotifier {
     });
   }
 
-  /// 배치 트랜잭션을 위한 임시 리스트에 거래 추가
-  void addToBatch(app_models.Transaction tx) {
+  /// 배치 전송을 위한 임시 리스트에 거래 추가
+  Future<bool> addTransaction(app_models.Transaction tx) async {
     _batchList.add(tx);
     _logger.d('배치 리스트에 거래 추가: ${tx.id}, 현재 배치 리스트 크기: ${_batchList.length}');
+    notifyListeners();
 
     if (_batchList.length >= _batchSize) {
-      _sendBatch();
+      // 배치가 준비되었으므로 배치 트랜잭션을 전송
+      _logger.d('배치 트랜잭션 전송 시작.');
+      sendBatchTransaction(); // await 제거하여 비동기 처리
+      _logger.d('배치 트랜잭션 전송 요청 완료.');
+      return true; // 배치 전송이 발생했음을 알림
     }
-    // 타이머 기능을 제거하였으므로, 추가 로직은 필요하지 않습니다.
+    return false; // 배치 전송이 발생하지 않았음을 알림
   }
 
-  /// 배치 트랜잭션 전송
-  Future<void> _sendBatch() async {
-    // 배치 리스트 복사 및 초기화
-    List<app_models.Transaction> batch = List.from(_batchList);
-    _batchList.clear();
+  /// 배치 트랜잭션 데이터 준비
+  Map<String, dynamic> prepareBatchTransactionData() {
+    List<String> ids = _batchList.map((tx) => tx.id).toList();
+    List<String> cids = _batchList.map((tx) => tx.cid).toList();
+
+    String connectedAddress = _metaMaskProvider.walletAddress;
+    _logger.d('연결된 지갑 주소: $connectedAddress');
+    if (connectedAddress.isEmpty) {
+      throw Exception('연결된 MetaMask 지갑 주소가 없습니다.');
+    }
+
+    final data = _blockchainService.contract
+        .function('storeTransactions')
+        .encodeCall([ids, cids]);
+
+    final tx = {
+      'from': connectedAddress,
+      'to': _blockchainService.contract.address.hex,
+      'data': bytesToHex(data, include0x: true),
+      'gas': '0x${(200000 * ids.length).toRadixString(16)}',
+      'gasPrice': '0x${BigInt.from(1000000000).toRadixString(16)}',
+    };
+
+    _logger.d('트랜잭션 객체: $tx');
+
+    return tx;
+  }
+
+  /// 배치 트랜잭션을 MetaMask를 통해 전송하는 메서드
+  Future<void> sendBatchTransaction() async {
+    _isLoading = true;
+    notifyListeners();
 
     try {
-      _logger.d('배치 트랜잭션 전송 시작: ${batch.length}건');
-      // BlockchainService를 사용하여 배치 트랜잭션 전송
-      String txHash = await _blockchainService.sendBatchTransaction(batch);
-      _logger.d('배치 트랜잭션 전송 완료, 해시: $txHash');
+      Map<String, dynamic> txData = prepareBatchTransactionData();
+
+      // MetaMaskProvider를 통해 트랜잭션 전송
+      _logger.d('트랜잭션 전송 요청: $txData');
+      await _metaMaskProvider.sendTransaction(txData);
+
+      // 사용자에게 MetaMask로 이동하라는 안내 표시
+      final BuildContext? context =
+          NavigationService.navigatorKey.currentState?.context;
+      if (context != null) {
+        showDialog(
+          context: context,
+          builder: (BuildContext context) {
+            return AlertDialog(
+              title: const Text('MetaMask에서 승인 필요'),
+              content: const Text('MetaMask 앱으로 이동하여 트랜잭션을 승인해주세요.'),
+              actions: <Widget>[
+                TextButton(
+                  child: const Text('확인'),
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                  },
+                ),
+              ],
+            );
+          },
+        );
+      }
+
+      // 트랜잭션 결과를 기다리지 않고 즉시 반환합니다.
+      // 배치 리스트는 그대로 유지하거나, 필요에 따라 초기화
+      // _batchList.clear();
+      // notifyListeners();
+
+      _logger.d('배치 트랜잭션 전송 요청 완료.');
     } catch (e, stackTrace) {
-      _logger.e('배치 트랜잭션 전송 에러: $e', e, stackTrace);
-      // 에러 발생 시 배치 리스트에 다시 추가하거나 적절한 에러 처리
-      _batchList.addAll(batch);
+      _error = '트랜잭션 전송 중 오류가 발생했습니다: $e';
+      notifyListeners();
+      _logger.e('트랜잭션 전송 에러: $e', e, stackTrace);
+    } finally {
+      _isLoading = false;
+      notifyListeners();
     }
   }
 
   /// 거래 추가 메서드
-  Future<void> addTransaction(app_models.Transaction tx) async {
+  /// Returns true if a batch was sent, false otherwise
+  Future<bool> addTransactionFirestore(app_models.Transaction tx) async {
     try {
       // Firestore에 저장 (date는 Timestamp로 자동 변환)
       await _transactionsCollection.doc(tx.id).set({
         'id': tx.id,
         'title': tx.title,
         'amount': tx.amount,
-        'date': tx.date, // Firestore는 DateTime을 Timestamp로 자동 변환
+        'date': Timestamp.fromDate(tx.date),
         'type': tx.type,
         'category': tx.category,
         'cid': tx.cid,
         'userId': tx.userId,
+        'status': 'pending',
+        'createdAt': Timestamp.now(),
       });
       _logger.d('Firestore에 거래 저장 완료: ${tx.id}');
+
+      // 기준 금액 이상인지 로그 추가
+      _logger.d('거래 금액: ${tx.amount}, 기준 금액: $_thresholdAmount');
 
       // 기준 금액 이상이면 블록체인에 저장
       if (tx.amount >= _thresholdAmount) {
@@ -148,22 +220,53 @@ class TransactionProvider with ChangeNotifier {
         _logger.d('Firestore에 CID 업데이트 완료: ${tx.id}, CID: $cid');
 
         // 배치 리스트에 추가
-        addToBatch(tx);
+        bool batchSent = await addTransaction(tx);
+        if (batchSent) {
+          _logger.d('배치 트랜잭션 전송 완료');
+          return true;
+        }
       }
 
       // Firestore 실시간 업데이트를 통해 자동으로 _transactions가 업데이트됩니다.
+      return false;
     } catch (e, stackTrace) {
-      _error = '거래를 추가하는 중 오류가 발생했습니다.';
+      _error = '거래를 추가하는 중 오류가 발생했습니다: $e';
       notifyListeners();
       _logger.e('거래 추가 에러: $e', e, stackTrace);
+
+      return false;
     }
   }
 
-  // 필요에 따라 dispose 메서드에서 타이머 관련 코드를 제거합니다.
+  // 배치 리스트의 크기 반환
+  int get batchCount => _batchList.length;
+
+  /// 배치 ID 생성 메서드
+  String _generateBatchId() {
+    return const Uuid().v4();
+  }
+
+  void clearError() {
+    _error = null;
+    notifyListeners();
+  }
+
   @override
   void dispose() {
     super.dispose();
   }
 
-  // 추가적인 메서드 필요 시 구현
+  /// 블록체인 트랜잭션을 처리하고 Firestore를 업데이트하는 메서드
+  Future<void> handleBlockchainTransaction(app_models.Transaction tx) async {
+    try {
+      await _transactionsCollection.doc(tx.id).update({
+        'status': 'confirmed',
+        'txHash': tx.txHash,
+        'updatedAt': Timestamp.now(),
+      });
+      _logger.d('Firestore에 트랜잭션 상태 업데이트 완료: ${tx.id}');
+    } catch (e, stackTrace) {
+      _logger.e('블록체인 트랜잭션 처리 에러: $e', e, stackTrace);
+    }
+  }
 }

@@ -28,36 +28,44 @@ class TransactionListScreen extends StatelessWidget {
 
     final transactions = provider.transactions;
 
-    return ListView.builder(
-      itemCount: transactions.length,
-      itemBuilder: (ctx, i) {
-        final tx = transactions[i];
-        IconData iconData =
-            CategoryIcons.icons[tx.category] ?? Icons.help_outline;
-        return Card(
-          color: AppColors.kCardColor,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          elevation: 2,
-          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: ListTile(
-            leading: Icon(
-              iconData,
-              color: AppColors.kAccentColor,
+    return transactions.isEmpty
+        ? const Center(
+            child: Text(
+              '거래 내역이 없습니다.',
+              style: TextStyle(fontSize: 16),
             ),
-            title: Text(tx.title, style: Theme.of(context).textTheme.bodyLarge),
-            subtitle: Text(
-              '${tx.amount.toStringAsFixed(0)}원',
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-            trailing: Text(
-              '${tx.date.month}/${tx.date.day}',
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-          ),
-        );
-      },
-    );
+          )
+        : ListView.builder(
+            itemCount: transactions.length,
+            itemBuilder: (ctx, i) {
+              final tx = transactions[i];
+              IconData iconData =
+                  CategoryIcons.icons[tx.category] ?? Icons.help_outline;
+              return Card(
+                color: AppColors.kCardColor,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                elevation: 2,
+                margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: ListTile(
+                  leading: Icon(
+                    iconData,
+                    color: AppColors.kAccentColor,
+                  ),
+                  title: Text(tx.title,
+                      style: Theme.of(context).textTheme.bodyLarge),
+                  subtitle: Text(
+                    '${tx.amount.toStringAsFixed(0)}원',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                  trailing: Text(
+                    '${tx.date.month}/${tx.date.day}',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                ),
+              );
+            },
+          );
   }
 }
